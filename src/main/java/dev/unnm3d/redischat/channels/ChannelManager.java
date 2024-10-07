@@ -6,6 +6,7 @@ import dev.unnm3d.redischat.RedisChat;
 import dev.unnm3d.redischat.api.DataManager;
 import dev.unnm3d.redischat.api.RedisChatAPI;
 import dev.unnm3d.redischat.api.VanishIntegration;
+import dev.unnm3d.redischat.api.events.AsyncRedisChatSendMessageEvent;
 import dev.unnm3d.redischat.api.events.AsyncRedisChatMessageEvent;
 import dev.unnm3d.redischat.api.objects.*;
 import dev.unnm3d.redischat.channels.gui.ChannelGUI;
@@ -193,7 +194,7 @@ public class ChannelManager extends RedisChatAPI {
         chatMessage.setContent(MiniMessage.miniMessage().serialize(event.getContent()));
 
         if (currentChannel.get().getProximityDistance() >= 0) {// Send to local server
-            sendGenericChat(chatMessage);
+            sendGenericChat(chatMessage, false);
             return;
         }
 
@@ -305,7 +306,11 @@ public class ChannelManager extends RedisChatAPI {
 
     @Override
     public void sendGenericChat(@NotNull ChatMessage chatMessage) {
+        sendGenericChat(chatMessage, true);
+    }
 
+    public void sendGenericChat(@NotNull ChatMessage chatMessage, boolean incoming) {
+        final Channel channel = getRegisteredChannel(chatMessage.getReceiver().getName()).orElse(getPublicChannel(null));
         Set<Player> recipients;
         if (chatMessage.getReceiver().isPlayer()) {
             final Player pmReceiver = plugin.getServer().getPlayerExact(chatMessage.getReceiver().getName());
@@ -317,7 +322,17 @@ public class ChannelManager extends RedisChatAPI {
         getComponentProvider().logComponent(miniMessage.deserialize(
                 chatMessage.getFormat().replace("{message}", chatMessage.getContent())));
 
-        if (!chatMessage.getSender().isDiscord())
+        AsyncRedisChatSendMessageEvent e = new AsyncRedisChatSendMessageEvent(chatMessage, channel, recipients, incoming);
+        Bukkit.getPluginManager().callEvent(e);
+        if(e.isCancelled()) return;
+        recipients = e.getRecipients();
+        boolean sendToDiscord = e.isSendToDiscord();
+        if(plugin.config.debug) {
+            plugin.getLogger().warning("Format after event: "+chatMessage.getFormat());
+            plugin.getLogger().warning("Content after event: "+chatMessage.getContent());
+        }
+
+        if (!chatMessage.getSender().isDiscord() && sendToDiscord)
             plugin.getDiscordHook().sendDiscordMessage(chatMessage);
 
         for (Player recipient : recipients) {
@@ -329,9 +344,8 @@ public class ChannelManager extends RedisChatAPI {
             }
 
             //Channel sound
-            final Channel soundChannel = getRegisteredChannel(chatMessage.getReceiver().getName()).orElse(getPublicChannel(null));
-            if (soundChannel.getNotificationSound() != null) {
-                recipient.playSound(recipient.getLocation(), soundChannel.getNotificationSound(), 1, 1);
+            if (channel.getNotificationSound() != null) {
+                recipient.playSound(recipient.getLocation(), channel.getNotificationSound(), 1, 1);
             }
 
             //Mention sound
